@@ -1,0 +1,168 @@
+//@version=5
+indicator("Fractal Model Professional", overlay=true, max_boxes_count=100, max_lines_count=200, max_labels_count=100)
+
+// =========================================================
+// Inputs
+// =========================================================
+htfInput        = input.timeframe("4H", "Higher Timeframe")
+biasMode        = input.string("Neutral", "Bias", options=["Neutral", "Bullish", "Bearish"])
+showHTFLevels   = input.bool(true, "Show HTF Reference Levels")
+showSweeps      = input.bool(true, "Show Sweep Signals")
+showC2          = input.bool(true, "Show C2 Markers")
+showCISD        = input.bool(true, "Show CISD Lines")
+showProjections = input.bool(true, "Show Projection Levels")
+showLabels      = input.bool(true, "Show Labels")
+positionSizer   = input.bool(false, "Enable Position Sizer")
+calculateOn     = input.string("Close", "Calculate On", options=["Close", "Open"])
+riskPercent     = input.float(1.0, "Risk %", minval=0.1, step=0.1)
+rrRatio         = input.float(2.0, "Risk:Reward", minval=0.5, step=0.1)
+maxSignals      = input.int(8, "Max Active Signals", minval=1)
+
+// =========================================================
+// Functions
+// =========================================================
+f_calcValue() =>
+    calculateOn == "Close" ? close : open
+
+f_buyBiasAllowed() =>
+    biasMode == "Neutral" or biasMode == "Bullish"
+
+f_sellBiasAllowed() =>
+    biasMode == "Neutral" or biasMode == "Bearish"
+
+// =========================================================
+// HTF Security Request
+// =========================================================
+[htfO, htfH, htfL, htfC] = request.security(syminfo.tickerid, htfInput, [open, high, low, close])
+
+htfLastHigh = htfH[1]
+htfLastLow  = htfL[1]
+calcVal     = f_calcValue()
+
+// =========================================================
+// Sweep Detection
+// =========================================================
+bullSweep = low < htfLastLow and calcVal > htfLastLow
+bearSweep = high > htfLastHigh and calcVal < htfLastHigh
+
+bullSweepFiltered = bullSweep and f_buyBiasAllowed()
+bearSweepFiltered = bearSweep and f_sellBiasAllowed()
+
+// C2 Candidates
+bullC2 = bullSweepFiltered
+bearC2 = bearSweepFiltered
+
+// CISD Approximation
+bullCISD = ta.valuewhen(bullC2, math.min(open, close), 0)
+bearCISD = ta.valuewhen(bearC2, math.max(open, close), 0)
+
+// Confirmation
+bullConfirmed = bullC2 and calcVal > bullCISD
+bearConfirmed = bearC2 and calcVal < bearCISD
+
+// Range Calculation
+bullRange = math.abs(htfLastLow - bullCISD)
+bearRange = math.abs(htfLastHigh - bearCISD)
+
+// Projection Levels
+bullProj1 = bullCISD + bullRange * 1.0
+bullProj2 = bullCISD + bullRange * 2.0
+bullProj3 = bullCISD + bullRange * 3.0
+
+bearProj1 = bearCISD - bearRange * 1.0
+bearProj2 = bearCISD - bearRange * 2.0
+bearProj3 = bearCISD - bearRange * 3.0
+
+// =========================================================
+// State Tracking
+// =========================================================
+var int lastBullC2Bar   = na
+var int lastBearC2Bar   = na
+var line[] bullCISDLines = array.new<line>()
+var line[] bearCISDLines = array.new<line>()
+
+// =========================================================
+// Plot HTF Reference Levels
+// =========================================================
+plot(showHTFLevels ? htfLastHigh : na, title="HTF High", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+plot(showHTFLevels ? htfLastLow : na, title="HTF Low", color=color.new(color.lime, 0), linewidth=2, style=plot.style_linebr)
+
+// =========================================================
+// Plot Sweep Signals
+// =========================================================
+plotshape(showSweeps and bullSweepFiltered ? bullSweepFiltered : na, title="Bull Sweep", style=shape.circle, location=location.belowbar, color=color.new(color.lime, 0), size=size.tiny)
+plotshape(showSweeps and bearSweepFiltered ? bearSweepFiltered : na, title="Bear Sweep", style=shape.circle, location=location.abovebar, color=color.new(color.red, 0), size=size.tiny)
+
+// =========================================================
+// Plot C2 Markers
+// =========================================================
+plotshape(showC2 and bullC2 ? bullC2 : na, title="Bull C2", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 0), size=size.small)
+plotshape(showC2 and bearC2 ? bearC2 : na, title="Bear C2", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small)
+
+// =========================================================
+// Plot CISD Lines
+// =========================================================
+if showCISD and bullC2 and (na(lastBullC2Bar) or bar_index != lastBullC2Bar)
+    lastBullC2Bar := bar_index
+    newBullLine = line.new(bar_index, bullCISD, bar_index + 40, bullCISD, xloc=xloc.bar_index, extend=extend.right, color=color.new(color.lime, 0), style=line.style_dashed, width=1)
+    array.push(bullCISDLines, newBullLine)
+    if array.size(bullCISDLines) > maxSignals
+        line.delete(array.shift(bullCISDLines))
+
+if showCISD and bearC2 and (na(lastBearC2Bar) or bar_index != lastBearC2Bar)
+    lastBearC2Bar := bar_index
+    newBearLine = line.new(bar_index, bearCISD, bar_index + 40, bearCISD, xloc=xloc.bar_index, extend=extend.right, color=color.new(color.red, 0), style=line.style_dashed, width=1)
+    array.push(bearCISDLines, newBearLine)
+    if array.size(bearCISDLines) > maxSignals
+        line.delete(array.shift(bearCISDLines))
+
+// =========================================================
+// Plot Projection Levels
+// =========================================================
+plot(showProjections and bullConfirmed ? bullProj1 : na, title="Bull Proj 1", color=color.new(color.lime, 25), linewidth=1, style=plot.style_line)
+plot(showProjections and bullConfirmed ? bullProj2 : na, title="Bull Proj 2", color=color.new(color.lime, 35), linewidth=1, style=plot.style_line)
+plot(showProjections and bullConfirmed ? bullProj3 : na, title="Bull Proj 3", color=color.new(color.lime, 45), linewidth=1, style=plot.style_line)
+
+plot(showProjections and bearConfirmed ? bearProj1 : na, title="Bear Proj 1", color=color.new(color.red, 25), linewidth=1, style=plot.style_line)
+plot(showProjections and bearConfirmed ? bearProj2 : na, title="Bear Proj 2", color=color.new(color.red, 35), linewidth=1, style=plot.style_line)
+plot(showProjections and bearConfirmed ? bearProj3 : na, title="Bear Proj 3", color=color.new(color.red, 45), linewidth=1, style=plot.style_line)
+
+// =========================================================
+// Labels
+// =========================================================
+if showLabels and bullC2
+    label.new(bar_index, low, "Bull C2", style=label.style_label_up, color=color.new(color.lime, 0), textcolor=color.white, size=size.tiny)
+
+if showLabels and bearC2
+    label.new(bar_index, high, "Bear C2", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.tiny)
+
+if showLabels and bullConfirmed
+    label.new(bar_index, low, "Confirmed", style=label.style_label_up, color=color.new(color.lime, 70), textcolor=color.white, size=size.small)
+
+if showLabels and bearConfirmed
+    label.new(bar_index, high, "Confirmed", style=label.style_label_down, color=color.new(color.red, 70), textcolor=color.white, size=size.small)
+
+// =========================================================
+// Position Sizer Boxes
+// =========================================================
+if positionSizer and bullConfirmed
+    entryPrice = bullCISD
+    stopPrice  = htfLastLow
+    riskVal    = math.abs(entryPrice - stopPrice)
+    targetVal  = entryPrice + riskVal * rrRatio
+    box.new(bar_index - 15, math.max(entryPrice, targetVal), bar_index + 60, math.min(entryPrice, stopPrice), border_color=color.new(color.lime, 0), bgcolor=color.new(color.lime, 85), extend=extend.right, xloc=xloc.bar_index)
+
+if positionSizer and bearConfirmed
+    entryPrice = bearCISD
+    stopPrice  = htfLastHigh
+    riskVal    = math.abs(stopPrice - entryPrice)
+    targetVal  = entryPrice - riskVal * rrRatio
+    box.new(bar_index - 15, math.max(entryPrice, stopPrice), bar_index + 60, math.min(entryPrice, targetVal), border_color=color.new(color.red, 0), bgcolor=color.new(color.red, 85), extend=extend.right, xloc=xloc.bar_index)
+
+// =========================================================
+// Alerts
+// =========================================================
+alertcondition(bullConfirmed, title="Bullish Fractal Confirmed", message="Bullish Fractal setup confirmed")
+alertcondition(bearConfirmed, title="Bearish Fractal Confirmed", message="Bearish Fractal setup confirmed")
+alertcondition(bullC2, title="Bullish C2", message="Bullish C2 detected")
+alertcondition(bearC2, title="Bearish C2", message="Bearish C2 detected")
